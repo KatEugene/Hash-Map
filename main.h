@@ -13,6 +13,8 @@
 #include <cstddef>
 #include <stdexcept>
 
+const int GROUP_SIZE = 16;
+
 class BitMask {
 public:
     BitMask() = default;
@@ -63,7 +65,7 @@ public:
         return {0};
     }
 private:
-    std::bitset<16> mask_;
+    std::bitset<GROUP_SIZE> mask_;
 };
 
 template<class KeyType, class ValueType, class Hash = std::hash<KeyType>>
@@ -224,13 +226,13 @@ public:
 
     explicit HashMap(Hash hash = Hash())
             : hash_(hash),
-              hash_map_(std::vector<slot>(sizes_.front() * 16)),
-              control_bytes_(std::vector<uint8_t>(sizes_.front() * 16, 0b11111111)) {}
+              hash_map_(std::vector<slot>(sizes_.front() * GROUP_SIZE)),
+              control_bytes_(std::vector<uint8_t>(sizes_.front() * GROUP_SIZE, EMPTY)) {}
     template<class Iterator>
     HashMap(Iterator begin, Iterator end, Hash hash = Hash())
             : hash_(hash),
-              hash_map_(std::vector<slot>(sizes_.front() * 16)),
-              control_bytes_(std::vector<uint8_t>(sizes_.front() * 16, 0b11111111)) {
+              hash_map_(std::vector<slot>(sizes_.front() * GROUP_SIZE)),
+              control_bytes_(std::vector<uint8_t>(sizes_.front() * GROUP_SIZE, EMPTY)) {
         while (begin != end) {
             insert(*begin);
             ++begin;
@@ -238,8 +240,8 @@ public:
     }
     HashMap(std::initializer_list<std::pair<KeyType, ValueType>> seq, Hash hash = Hash())
             : hash_(hash),
-              hash_map_(std::vector<slot>(sizes_.front() * 16)),
-              control_bytes_(std::vector<uint8_t>(sizes_.front() * 16, 0b11111111)) {
+              hash_map_(std::vector<slot>(sizes_.front() * GROUP_SIZE)),
+              control_bytes_(std::vector<uint8_t>(sizes_.front() * GROUP_SIZE, EMPTY)) {
         for (auto element : seq) {
             insert(element);
         }
@@ -262,20 +264,18 @@ public:
             ++real_size_;
             ++captured_cnt_;
             size_t group = get_hash1(key) % sizes_[cur_size_];
-            int ITERS = 0;
             while (true) {
-                ITERS++; if (ITERS >= 1e6) assert(false);
-                BitMask i = match(0b11111111, group * 16);
+                BitMask i = match(EMPTY, group * GROUP_SIZE);
 
                 if (i.begin() != i.end()) {
-                    hash_map_[group * 16 + *i.begin()] = slot(element);
-                    control_bytes_[group * 16 + *i.begin()] = get_hash2(key);
+                    hash_map_[group * GROUP_SIZE + *i.begin()] = slot(element);
+                    control_bytes_[group * GROUP_SIZE + *i.begin()] = get_hash2(key);
                     break;
                 }
-                i = match(0b10000000, group * 16);
+                i = match(DELETED, group * GROUP_SIZE);
                 if (i.begin() != i.end()) {
-                    hash_map_[group * 16 + *i.begin()] = slot(element);
-                    control_bytes_[group * 16 + *i.begin()] = get_hash2(key);
+                    hash_map_[group * GROUP_SIZE + *i.begin()] = slot(element);
+                    control_bytes_[group * GROUP_SIZE + *i.begin()] = get_hash2(key);
                     break;
                 }
                 group = (group + 1) % sizes_[cur_size_];
@@ -290,41 +290,37 @@ public:
         if (it != end()) {
             --real_size_;
             auto cur_begin = iterator(hash_map_.begin(), hash_map_.end());
-            int group = (it - cur_begin) / 16;
-            if (check_empty(group * 16)) {
+            int group = (it - cur_begin) / GROUP_SIZE;
+            if (check_empty(group * GROUP_SIZE)) {
                 hash_map_[it - cur_begin].empty = true;
-                control_bytes_[it - cur_begin] = 0b11111111;
+                control_bytes_[it - cur_begin] = EMPTY;
             } else {
                 hash_map_[it - cur_begin].deleted = true;
-                control_bytes_[it - cur_begin] = 0b10000000;
+                control_bytes_[it - cur_begin] = DELETED;
             }
         }
     }
     iterator find(KeyType key) {
         size_t group = get_hash1(key) % sizes_[cur_size_];
-        int ITERS = 0;
         while (true) {
-            ITERS++; if (ITERS >= 1e6) assert(false);
-            for (auto i : match(get_hash2(key), group * 16)) {
-                if (key == hash_map_[group * 16 + i].get_key()) {
-                    return iterator(hash_map_.begin() + group * 16 + i, hash_map_.end());
+            for (auto i : match(get_hash2(key), group * GROUP_SIZE)) {
+                if (key == hash_map_[group * GROUP_SIZE + i].get_key()) {
+                    return iterator(hash_map_.begin() + group * GROUP_SIZE + i, hash_map_.end());
                 }
             }
-            if (check_empty(group * 16)) return end();
+            if (check_empty(group * GROUP_SIZE)) return end();
             group = (group + 1) % sizes_[cur_size_];
         }
     }
     const_iterator find(KeyType key) const {
         size_t group = get_hash1(key) % sizes_[cur_size_];
-        int ITERS = 0;
         while (true) {
-            ITERS++; if (ITERS >= 1e6) assert(false);
-            for (auto i : match(get_hash2(key), group * 16)) {
-                if (key == hash_map_[group * 16 + i].get_key()) {
-                    return const_iterator(hash_map_.cbegin() + group * 16 + i, hash_map_.cend());
+            for (auto i : match(get_hash2(key), group * GROUP_SIZE)) {
+                if (key == hash_map_[group * GROUP_SIZE + i].get_key()) {
+                    return const_iterator(hash_map_.cbegin() + group * GROUP_SIZE + i, hash_map_.cend());
                 }
             }
-            if (check_empty(group * 16)) return end();
+            if (check_empty(group * GROUP_SIZE)) return end();
             group = (group + 1) % sizes_[cur_size_];
         }
     }
@@ -345,14 +341,14 @@ public:
         real_size_ = 0;
         captured_cnt_ = 0;
         hash_map_.clear();
-        hash_map_.resize(sizes_.front() * 16);
+        hash_map_.resize(sizes_.front() * GROUP_SIZE);
         control_bytes_.clear();
-        control_bytes_.resize(sizes_.front() * 16, 0b11111111);
+        control_bytes_.resize(sizes_.front() * GROUP_SIZE, EMPTY);
     }
 
     iterator begin() {
         for (size_t i = 0; i < hash_map_.size(); ++i) {
-            if (control_bytes_[i] != 0b11111111 and control_bytes_[i] != 0b10000000) {
+            if (control_bytes_[i] != EMPTY and control_bytes_[i] != DELETED) {
                 return iterator(hash_map_.begin() + i, hash_map_.end());
             }
         }
@@ -363,7 +359,7 @@ public:
     }
     const_iterator begin() const {
         for (size_t i = 0; i < hash_map_.size(); ++i) {
-            if (control_bytes_[i] != 0b11111111 and control_bytes_[i] != 0b10000000) {
+            if (control_bytes_[i] != EMPTY and control_bytes_[i] != DELETED) {
                 return const_iterator(hash_map_.cbegin() + i, hash_map_.cend());
             }
         }
@@ -373,7 +369,9 @@ public:
         return const_iterator(hash_map_.cend(), hash_map_.cend());
     }
 private:
-    constexpr const static double MAX_LOAD_FACTOR = 0.6;
+    const double MAX_LOAD_FACTOR = 0.6;
+    const int DELETED = DELETED;
+    const int EMPTY = EMPTY;
     std::vector<int> sizes_ =
             {5, 11, 23, 47, 97, 197, 397, 797, 1597, 3203, 6421, 12853, 25717, 51437, 102877, 205759, 411527, 823117,
              1646237, 3292489, 6584983};
@@ -390,7 +388,7 @@ private:
         return BitMask(_mm_movemask_epi8(_mm_cmpeq_epi8(distributed_hash, metadata)));
     }
     bool check_empty(size_t index) const {
-        uint8_t hash = 0b11111111;
+        uint8_t hash = EMPTY;
         auto distributed_hash = _mm_set1_epi8(hash);
         auto metadata = _mm_loadu_si128((__m128i *) &control_bytes_[index]);
         return _mm_movemask_epi8(_mm_cmpeq_epi8(distributed_hash, metadata)) != 0;
@@ -412,11 +410,11 @@ private:
         captured_cnt_ = 0;
         ++cur_size_;
         hash_map_.clear();
-        hash_map_.resize(sizes_[cur_size_] * 16);
+        hash_map_.resize(sizes_[cur_size_] * GROUP_SIZE);
         control_bytes_.clear();
-        control_bytes_.resize(sizes_[cur_size_] * 16, 0b11111111);
+        control_bytes_.resize(sizes_[cur_size_] * GROUP_SIZE, EMPTY);
         for (size_t i = 0; i < copy_hash_map.size(); ++i) {
-            if (copy_control_bytes[i] != 0b11111111 and copy_control_bytes[i] != 0b10000000) {
+            if (copy_control_bytes[i] != EMPTY and copy_control_bytes[i] != DELETED) {
                 insert({copy_hash_map[i].get_key(), copy_hash_map[i].get_value()});
             }
         }
