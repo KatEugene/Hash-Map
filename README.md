@@ -1,2 +1,2 @@
-# Hash-Map
-Hash Map based on double hashing
+# Swiss Table
+Hash Map with AVX optimization   
